@@ -16,15 +16,22 @@ close FH;
 
 exit 1 if ! $busid;
 
+my $rst = "/sys/bus/pci/devices/0000:$busid/reset";
 my $cfg = "/sys/bus/pci/devices/0000:$busid/config";
 exit 1 if (! -e $cfg);
 
 system ('dd', "if=$cfg", 'of=/var/lib/hardware/xmm_cfg', 'bs=256', 'count=1', 'status=none');
 system ('modprobe', 'acpi_call');
 system ('rmmod', 'xmm7360');
+sleep 2;
 system ("echo '\_SB.PCI0.RP07.PXSX._RST' | tee /proc/acpi/call");
-sleep 1;
+system ("echo '\_SB.PCI0.RP07.PXSX._OFF' | tee /proc/acpi/call");
+sleep 2;
+system ("echo '\_SB.PCI0.RP07.PXSX._ON' | tee /proc/acpi/call");
+print "resetting using $rst";
+system ("echo -n '1' > $rst");
+sleep 2;
 system ('dd', "of=$cfg", 'if=/var/lib/hardware/xmm_cfg', 'bs=256', 'count=1', 'status=none');
 system ('modprobe', 'xmm7360');
-sleep 3;
-    
+sleep 1;
+system ('grep','xmm7360','/proc/modules');

@@ -24,8 +24,8 @@ unload:
 
 reset:
 	-sudo /sbin/rmmod xmm7360
-	sudo dd if=/sys/bus/pci/devices/0000:3b:00.0/config of=/tmp/xmm_cfg bs=256 count=1 status=none
+	sudo dd if=/sys/bus/pci/devices/0000\:71\:00.0/config of=/tmp/xmm_cfg bs=256 count=1 status=none
 	sudo modprobe acpi_call
 	echo '\_SB.PCI0.RP07.PXSX._RST' | sudo tee /proc/acpi/call
 	sleep 1
-	sudo dd of=/sys/bus/pci/devices/0000:3b:00.0/config if=/tmp/xmm_cfg bs=256 count=1 status=none
+	sudo dd of=/sys/bus/pci/devices/0000\:71\:00.0/config if=/tmp/xmm_cfg bs=256 count=1 status=none

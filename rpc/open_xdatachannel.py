@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 
 import configargparse
+import pprint
+import json
 from pyroute2 import IPRoute
 from os.path import join, abspath, dirname
 import uuid
@@ -225,17 +227,19 @@ else:
 
 devices = manager.GetDevices()
 
+devpath = None
+
 for d in devices:
     dev_proxy = system_bus.get_object("org.freedesktop.NetworkManager", d)
     prop_iface = dbus.Interface(dev_proxy, "org.freedesktop.DBus.Properties")
     props = prop_iface.GetAll("org.freedesktop.NetworkManager.Device")
-    if props["Interface"] == "wwan0":
-        devpath = d
-        print("found Interface: %s" % props["Interface"])
+    dev_type = prop_iface.Get('org.freedesktop.NetworkManager.Device', 'DeviceType')
+    print(f"## devpath: {d}")
+    # 8 is NM_DEVICE_TYPE_MODEM (for WWAN)
+    if dev_type == 8 and props["Interface"] == "wwan0":
         print("Managed: %s" % props["Managed"])
         if props["Managed"] == 0:
             print("activate")
             prop_iface.Set("org.freedesktop.NetworkManager.Device",
                            "Managed", dbus.Boolean(1))
-
-manager.ActivateConnection(connection_path, devpath, "/")
+            manager.ActivateConnection(connection_path, devpath, "/")
