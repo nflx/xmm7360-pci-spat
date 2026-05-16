@@ -44,7 +44,9 @@ if [[ "$1" = "setup" ]]; then
   chmod 755 /usr/local/bin/lte
 
   make
-  make load
+  /sbin/rmmod iosm 2>/dev/null || true
+  /sbin/rmmod xmm7360 2>/dev/null || true
+  /sbin/modprobe xmm7360 || echo "Warning: could not load module (may need reboot or DKMS update)"
 fi
 
 # remove interface, mod
@@ -56,14 +58,85 @@ fi
 
 # down param
 if [[ "$1" = "down" ]]; then
-  echo "taking wwan0 down!" 
-  ip link set wwan0 down
+  echo "taking wwan0 down!"
+  # Kill open_xdatachannel.py so rmmod can succeed
+  pkill -f open_xdatachannel.py 2>/dev/null || true
+  sleep 1
+  # Capture IP before bringing the interface down
+  WWAN_IP=$(ip -4 addr show wwan0 2>/dev/null | awk '/inet /{print $2}' | cut -d/ -f1)
+  ip link set wwan0 down 2>/dev/null || true
+  nmcli connection delete fake-wwan 2>/dev/null || true
+  # RST any open TCP connections that were using the wwan0 IP so the browser
+  # fails over to WiFi immediately instead of hanging until TCP timeout
+  if [[ -n "$WWAN_IP" ]]; then
+    ss -K src "$WWAN_IP" 2>/dev/null || true
+  fi
   exit
 fi
 
-if [[ "$1" = "up" ]]; then
-  echo "bringing wwan0 up!" 
+if [[ "$1" = "flr" ]]; then
+  echo "triggering PCIe Function Level Reset on XMM7360..."
+  echo 1 > /sys/bus/pci/devices/0000:71:00.0/reset
+  echo "FLR done"
+  exit 0
+fi
 
-  python3 $SCRIPT_DIR/../rpc/open_xdatachannel.py
+if [[ "$1" = "hard-reset" ]]; then
+  echo "performing full PCIe + module reset..."
+  pkill -f open_xdatachannel.py 2>/dev/null || true
+  sleep 1
+  ip link set wwan0 down 2>/dev/null || true
+  # FLR resets modem firmware so driver remove() doesn't block on unresponsive firmware
+  if [ -e /sys/bus/pci/devices/0000:71:00.0/reset ]; then
+    echo 1 > /sys/bus/pci/devices/0000:71:00.0/reset 2>/dev/null || true
+    sleep 1
+  fi
+  /sbin/rmmod xmm7360 2>/dev/null || true
+  sleep 1
+  if [ -e /sys/bus/pci/devices/0000:71:00.0 ]; then
+    echo 1 > /sys/bus/pci/devices/0000:71:00.0/remove
+    sleep 1
+  fi
+  # Rescan only RP02 (modem's root port) — global rescan can kill the session
+  echo 1 > /sys/bus/pci/devices/0000:00:1c.0/rescan
+  for i in $(seq 1 10); do
+    [ -e /sys/bus/pci/devices/0000:71:00.0 ] && break
+    sleep 1
+  done
+  [ -e /sys/bus/pci/devices/0000:71:00.0 ] || { echo "ERROR: PCI device did not reappear"; exit 1; }
+  /sbin/modprobe xmm7360 || { echo "ERROR: modprobe failed"; exit 1; }
+  for i in $(seq 1 10); do
+    [ -e /dev/wwan0xmmrpc0 ] && break
+    echo "  waiting for wwan interfaces... ($i)"
+    sleep 1
+  done
+  [ -e /dev/wwan0xmmrpc0 ] || { echo "ERROR: wwan interfaces did not appear"; exit 1; }
+  echo "hard-reset done, wwan interfaces ready"
+fi
+
+if [[ "$1" = "up" ]]; then
+  echo "bringing wwan0 up!"
+
+  if ! ip link show wwan0 &>/dev/null; then
+    echo "wwan0 not found, loading module..."
+    /sbin/rmmod iosm 2>/dev/null || true
+    /sbin/modprobe xmm7360 || { echo "Failed to load xmm7360 module"; exit 1; }
+    sleep 1
+  fi
+
+  # Explicit bind in case udev didn't auto-bind after modprobe
+  if [ ! -e /sys/bus/pci/devices/0000:71:00.0/driver ]; then
+    echo 0000:71:00.0 > /sys/bus/pci/drivers/xmm7360/bind 2>/dev/null || true
+    sleep 2
+  fi
+  for i in $(seq 1 15); do
+    [ -e /dev/wwan0xmmrpc0 ] && break
+    echo "  waiting for XMM RPC interface... ($i)"
+    sleep 1
+  done
+  python3 $SCRIPT_DIR/../rpc/open_xdatachannel.py -d || { echo "open_xdatachannel.py failed, aborting"; exit 1; }
   ip link set wwan0 up
+  nmcli connection delete fake-wwan 2>/dev/null || true
+  nmcli connection add type dummy ifname dummy0 con-name fake-wwan
+  nmcli connection up fake-wwan
 fi
