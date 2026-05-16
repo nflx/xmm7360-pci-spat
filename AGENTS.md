@@ -31,6 +31,95 @@ without a password prompt.
 
 ---
 
+## Installing the suspend/resume tweaks
+
+These steps are required **in addition to** the standard install in
+`INSTALLING.md`. They make s2idle work correctly with the modem on this
+Dell XPS / Alder Lake platform.
+
+### Prerequisites
+
+- `lte setup` already completed (module built, `lte` symlinked to
+  `/usr/local/bin/lte`, `xmm7360.ini` configured)
+- Running from the repo root: `cd ~/slask/claude-slask/lte/xmm7360-pci-SPAT`
+
+### Step 1 — Sleep hook
+
+Copies `scripts/sleep-hook.sh` to the systemd hook directory.
+
+```bash
+sudo cp scripts/sleep-hook.sh /usr/lib/systemd/system-sleep/xmm7360-sleep.sh
+sudo chmod +x /usr/lib/systemd/system-sleep/xmm7360-sleep.sh
+```
+
+### Step 2 — Disable PCIe wakeup on modem's root port
+
+Prevents the modem's root port (RP02) from forwarding PME events that
+wake the system from s2idle.
+
+```bash
+echo 'ACTION=="add", SUBSYSTEM=="pci", KERNEL=="0000:00:1c.0", ATTR{power/wakeup}="disabled"' \
+  | sudo tee /etc/udev/rules.d/99-lte-wakeup.rules
+sudo udevadm control --reload-rules
+```
+
+### Step 3 — Mask the ACPI GPE 0x6E storm
+
+The modem generates ~600k ACPI GPE 0x6E interrupts per session that
+immediately wake the system. This service masks GPE 0x6E at every boot.
+
+```bash
+sudo tee /etc/systemd/system/acpi-mask-gpe6e.service << 'EOF'
+[Unit]
+Description=Mask ACPI GPE 0x6E storm from Intel XMM7360 LTE modem
+After=systemd-udevd.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo disable > /sys/firmware/acpi/interrupts/gpe6E'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl enable --now acpi-mask-gpe6e.service
+```
+
+### Step 4 — Sudoers entry for passwordless lte up/down
+
+Required for the tray indicator and the sleep hook to call `lte` as
+root without a password prompt.
+
+```bash
+sudo tee /etc/sudoers.d/lte << 'EOF'
+# Allow lte-indicator and sleep hook to manage LTE without password
+eml1 ALL=(root) NOPASSWD: /usr/local/bin/lte
+EOF
+sudo chmod 440 /etc/sudoers.d/lte
+```
+
+### Verify
+
+After a reboot:
+
+```bash
+# GPE should be masked
+cat /sys/firmware/acpi/interrupts/gpe6E   # expect: disabled
+
+# Root port wakeup should be disabled
+cat /sys/bus/pci/devices/0000:00:1c.0/power/wakeup   # expect: disabled
+
+# Modem should connect normally
+lte up
+lte-indicator status   # expect: connected
+```
+
+Then test suspend: `systemctl suspend`. On resume the modem should
+reconnect automatically within ~15 seconds.
+
+---
+
 ## Scripts overview
 
 ### `scripts/lte.sh`
