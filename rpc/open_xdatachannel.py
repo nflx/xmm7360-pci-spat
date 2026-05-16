@@ -225,11 +225,16 @@ else:
 
 devices = manager.GetDevices()
 
+devpath = None
+
 for d in devices:
     dev_proxy = system_bus.get_object("org.freedesktop.NetworkManager", d)
     prop_iface = dbus.Interface(dev_proxy, "org.freedesktop.DBus.Properties")
     props = prop_iface.GetAll("org.freedesktop.NetworkManager.Device")
-    if props["Interface"] == "wwan0":
+    dev_type = prop_iface.Get("org.freedesktop.NetworkManager.Device", "DeviceType")
+    # NM_DEVICE_TYPE_MODEM == 8; filter by type so we don't accidentally
+    # match a wwan0 alias on a non-modem device (e.g. a second WWAN adapter).
+    if dev_type == 8 and props["Interface"] == "wwan0":
         devpath = d
         print("found Interface: %s" % props["Interface"])
         print("Managed: %s" % props["Managed"])
