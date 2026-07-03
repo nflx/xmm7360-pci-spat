@@ -104,6 +104,8 @@ if [[ "$1" = "hard-reset" ]]; then
     sleep 1
   done
   [ -e /sys/bus/pci/devices/0000:71:00.0 ] || { echo "ERROR: PCI device did not reappear"; exit 1; }
+  # udev may auto-bind the in-tree iosm driver on rescan before we get here
+  /sbin/rmmod iosm 2>/dev/null || true
   /sbin/modprobe xmm7360 || { echo "ERROR: modprobe failed"; exit 1; }
   for i in $(seq 1 10); do
     [ -e /dev/wwan0xmmrpc0 ] && break
@@ -134,6 +136,7 @@ if [[ "$1" = "up" ]]; then
     echo "  waiting for XMM RPC interface... ($i)"
     sleep 1
   done
+  [ -e /dev/wwan0xmmrpc0 ] || { echo "ERROR: XMM RPC interface never appeared"; exit 1; }
   python3 $SCRIPT_DIR/../rpc/open_xdatachannel.py -d || { echo "open_xdatachannel.py failed, aborting"; exit 1; }
   ip link set wwan0 up
   nmcli connection delete fake-wwan 2>/dev/null || true

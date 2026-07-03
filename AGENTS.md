@@ -1,7 +1,7 @@
 # AGENTS.md — xmm7360-pci-SPAT setup notes
 
 This is a local fork/clone of the xmm7360-pci driver, customised for
-**Dell XPS 13 5430** (`emils5430`) running Ubuntu 24.04, kernel 6.8,
+**Dell XPS 13 5430** running Ubuntu 24.04, kernel 6.8,
 with an Intel XMM7360 LTE Advanced Modem at PCIe `0000:71:00.0`.
 
 ---
@@ -24,7 +24,7 @@ with an Intel XMM7360 LTE Advanced Modem at PCIe `0000:71:00.0`.
 
 Module is installed via DKMS and signed for Secure Boot. The connection
 is managed by `scripts/lte.sh` + `rpc/open_xdatachannel.py`, with a
-GTK tray indicator at `/home/eml1/bin/lte-indicator`.
+GTK tray indicator at `~/bin/lte-indicator`.
 
 Sudoers entry (NOPASSWD) allows the indicator to call `sudo lte up/down`
 without a password prompt.
@@ -94,7 +94,7 @@ root without a password prompt.
 ```bash
 sudo tee /etc/sudoers.d/lte << 'EOF'
 # Allow lte-indicator and sleep hook to manage LTE without password
-eml1 ALL=(root) NOPASSWD: /usr/local/bin/lte
+<username> ALL=(root) NOPASSWD: /usr/local/bin/lte
 EOF
 sudo chmod 440 /etc/sudoers.d/lte
 ```
@@ -149,7 +149,7 @@ processes remain in the background holding the modem open
 Template for the systemd sleep hook (see below). Keep in sync with the
 deployed file at `/usr/lib/systemd/system-sleep/xmm7360-sleep.sh`.
 
-### `/home/eml1/bin/lte-indicator`
+### `~/bin/lte-indicator`
 
 GTK tray indicator (AppIndicator3). Polls `ip route show dev wwan0`
 every 2 seconds to determine state. Calls `sudo lte up/down` via
