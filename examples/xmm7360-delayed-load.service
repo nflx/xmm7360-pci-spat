@@ -1,0 +1,18 @@
+[Unit]
+Description=Delayed load of xmm7360 LTE modem driver (avoid udev probe race during early parallel boot)
+# xmm7360 is blacklisted from udev's PCI-alias autoload (see
+# /etc/modprobe.d/blacklist-xmm7360-autoload.conf). Loading it this early,
+# in parallel with Plymouth/DRM modeset and the rest of the early-boot udev
+# rush, was correlated with a full-system livelock at PCI probe time on
+# normal (non-recovery) boots. Loading it once graphical.target is reached
+# avoids that contention window.
+After=graphical.target
+
+[Service]
+Type=oneshot
+ExecStart=/sbin/modprobe xmm7360
+RemainAfterExit=yes
+TimeoutStartSec=60
+
+[Install]
+WantedBy=graphical.target
