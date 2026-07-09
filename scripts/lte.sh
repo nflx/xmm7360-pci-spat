@@ -81,7 +81,7 @@ if [[ "$1" = "flr" ]]; then
   exit 0
 fi
 
-if [[ "$1" = "hard-reset" ]]; then
+hard_reset() {
   echo "performing full PCIe + module reset..."
   pkill -f open_xdatachannel.py 2>/dev/null || true
   sleep 1
@@ -103,26 +103,31 @@ if [[ "$1" = "hard-reset" ]]; then
     [ -e /sys/bus/pci/devices/0000:71:00.0 ] && break
     sleep 1
   done
-  [ -e /sys/bus/pci/devices/0000:71:00.0 ] || { echo "ERROR: PCI device did not reappear"; exit 1; }
+  [ -e /sys/bus/pci/devices/0000:71:00.0 ] || { echo "ERROR: PCI device did not reappear"; return 1; }
   # udev may auto-bind the in-tree iosm driver on rescan before we get here
   /sbin/rmmod iosm 2>/dev/null || true
-  /sbin/modprobe xmm7360 || { echo "ERROR: modprobe failed"; exit 1; }
+  /sbin/modprobe xmm7360 || { echo "ERROR: modprobe failed"; return 1; }
   for i in $(seq 1 10); do
     [ -e /dev/xmm0/rpc ] && break
     echo "  waiting for wwan interfaces... ($i)"
     sleep 1
   done
-  [ -e /dev/xmm0/rpc ] || { echo "ERROR: wwan interfaces did not appear"; exit 1; }
+  [ -e /dev/xmm0/rpc ] || { echo "ERROR: wwan interfaces did not appear"; return 1; }
   echo "hard-reset done, wwan interfaces ready"
+}
+
+if [[ "$1" = "hard-reset" ]]; then
+  hard_reset || exit 1
+  exit 0
 fi
 
-if [[ "$1" = "up" ]]; then
+bring_up() {
   echo "bringing wwan0 up!"
 
   if ! ip link show wwan0 &>/dev/null; then
     echo "wwan0 not found, loading module..."
     /sbin/rmmod iosm 2>/dev/null || true
-    /sbin/modprobe xmm7360 || { echo "Failed to load xmm7360 module"; exit 1; }
+    /sbin/modprobe xmm7360 || { echo "Failed to load xmm7360 module"; return 1; }
     sleep 1
   fi
 
@@ -136,10 +141,26 @@ if [[ "$1" = "up" ]]; then
     echo "  waiting for XMM RPC interface... ($i)"
     sleep 1
   done
-  [ -e /dev/xmm0/rpc ] || { echo "ERROR: XMM RPC interface never appeared"; exit 1; }
-  python3 $SCRIPT_DIR/../rpc/open_xdatachannel.py -d || { echo "open_xdatachannel.py failed, aborting"; exit 1; }
+  [ -e /dev/xmm0/rpc ] || { echo "ERROR: XMM RPC interface never appeared"; return 1; }
+  python3 $SCRIPT_DIR/../rpc/open_xdatachannel.py -d || { echo "open_xdatachannel.py failed"; return 1; }
   ip link set wwan0 up
   nmcli connection delete fake-wwan 2>/dev/null || true
   nmcli connection add type dummy ifname dummy0 con-name fake-wwan
   nmcli connection up fake-wwan
+}
+
+if [[ "$1" = "up" ]]; then
+  if ! bring_up; then
+    # open_xdatachannel.py fails outright (e.g. "Device or resource busy" on
+    # /dev/xmm0/rpc) when the driver's RPC channel is left in a stuck state
+    # from a prior crash/kill — a plain retry never clears it, only a PCIe
+    # FLR + module reload does. Self-heal once before giving up.
+    echo "up failed, self-healing: hard-resetting modem and retrying once..."
+    if hard_reset && bring_up; then
+      echo "self-heal succeeded"
+    else
+      echo "ERROR: up failed even after hard-reset, giving up"
+      exit 1
+    fi
+  fi
 fi
