@@ -14,6 +14,8 @@ This specific fork fixes issues with building the package as the AUR packages wo
 
 Please see [INSTALLING.md](INSTALLING.md) for details on how to setup this driver on your system.
 
+If you're on a laptop with s2idle-only suspend, also see [LAPTOP-WORKAROUNDS.md](LAPTOP-WORKAROUNDS.md) for the extra suspend/resume workarounds this fork needed.
+
 ## Status
 
 This release supports native IP.

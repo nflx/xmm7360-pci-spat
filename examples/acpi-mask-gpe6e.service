@@ -1,0 +1,14 @@
+[Unit]
+Description=Mask ACPI GPE 0x6E storm from Intel XMM7360 LTE modem
+# The XMM7360 modem generates a continuous GPE 0x6E storm (~600k events/session)
+# that wakes the system immediately from s2idle. Masking it here is belt-and-suspenders
+# alongside the sleep hook which removes the PCIe device before suspend.
+After=systemd-udevd.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'echo disable > /sys/firmware/acpi/interrupts/gpe6E'
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

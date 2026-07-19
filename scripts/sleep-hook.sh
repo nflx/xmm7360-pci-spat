@@ -3,8 +3,10 @@
 # Unloads the driver before suspend so the PCIe device goes quiet
 # (no PME wakeup events). Reloads and reconnects after resume.
 #
-# Install: sudo cp /full/path/to/sleep-hook.sh /usr/lib/systemd/system-sleep/xmm7360-sleep.sh
-#          sudo chmod +x /usr/lib/systemd/system-sleep/xmm7360-sleep.sh
+# Install: sudo ln -s /full/path/to/sleep-hook.sh /usr/lib/systemd/system-sleep/xmm7360-sleep.sh
+#          sudo chmod +x sleep-hook.sh
+# Symlink, not a copy — resolves lte.sh via its own real path (readlink -f "$0"),
+# so it keeps working if this repo ever moves. A copy drifted stale before.
 #
 # Also required for suspend to work (Dell XPS + XMM7360):
 #   1. Mask ACPI GPE 0x6E storm from modem:
@@ -18,6 +20,7 @@ SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 LTE="$SCRIPT_DIR/lte.sh"
 
 STATE_FILE=/run/xmm7360-was-up
+LOG_FILE=/var/log/xmm7360-resume.log
 PCI_DEV=0000:71:00.0
 # Rescan only the modem's root port (RP02), not the whole bus.
 # Global rescan can kill the sudo/systemd session by briefly taking down
@@ -48,7 +51,7 @@ case "$1" in
             echo $PCI_DEV > /sys/bus/pci/drivers/xmm7360/bind 2>/dev/null || true
             # Run lte up in background so GNOME resumes immediately.
             # LTE will connect ~15s after desktop is visible.
-            "$LTE" up &>/dev/null &
+            { echo "=== $(date -Is) resume: lte up ==="; "$LTE" up; } >>"$LOG_FILE" 2>&1 &
         fi
         ;;
 esac
