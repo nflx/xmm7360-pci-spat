@@ -129,11 +129,13 @@ or use `sudo lte <cmd>` from terminal).
 
 | Command | What it does |
 |---------|-------------|
-| `lte up` | Bind driver if needed, wait for XMM RPC interface, run `open_xdatachannel.py`, bring up wwan0, add fake-wwan NM connection |
+| `lte up` | Bind driver if needed, wait for XMM RPC interface, run `open_xdatachannel.py`, bring up wwan0, add fake-wwan NM connection, verify traffic actually passes. Self-heals once (hard-reset + retry) on any failure, including a link that came up but has no connectivity |
 | `lte down` | Kill `open_xdatachannel.py`, bring down wwan0, delete fake-wwan NM connection, RST open TCP connections via `ss -K` |
 | `lte flr` | PCIe Function Level Reset — resets modem firmware without unloading module. Use when modem is unresponsive but driver is still bound |
 | `lte hard-reset` | Full recovery cycle: FLR → rmmod → PCI remove → RP02 rescan → modprobe → bind. Use when `lte up` fails with "XMM RPC interface does not exist" |
 | `lte setup` | One-time install: pip deps, symlink to `/usr/local/bin/lte`, build module |
+
+`up`, `hard-reset`, and `flr` acquire an `flock` on `/run/lock/xmm7360-lte.lock` (10 min wait) before touching driver/interface state, so concurrent invocations (e.g. the sleep hook's post-resume `lte up` and lte-indicator's own D-Bus wake handler firing seconds apart) serialize instead of racing each other. `down` deliberately does **not** wait on this lock — a post-resume cellular re-attach inside a stuck-looking `up` can genuinely take minutes, and `down`'s `pkill -f open_xdatachannel.py` is the only way to cancel it; it's meant to interrupt an in-flight `up`, not queue behind it.
 
 ### `rpc/open_xdatachannel.py`
 
@@ -240,9 +242,56 @@ systemctl enable --now acpi-mask-gpe6e.service
   NetworkManager reacting to interface changes during the LTE bring-up.
   Mitigated by running `lte up` in the background from the sleep hook.
 
+- **Two independent triggers race `lte up` after resume** — the systemd
+  sleep hook backgrounds `lte up` right after rescan/modprobe, and
+  lte-indicator's own D-Bus `PrepareForSleep` listener separately calls
+  `sudo lte up` ~8s after wake. Without serialization these can interleave
+  mid rmmod/modprobe/PCI-remove-rescan. Confirmed live via journalctl
+  2026-08-03: a `sudo lte up` session stayed open 3.5 minutes while two
+  separate `sudo lte down` invocations ran concurrently against it.
+  `lte.sh`'s `up`/`hard-reset`/`flr` now hold an `flock` so a second
+  automatic trigger waits instead of interleaving; `down` deliberately does
+  not wait on it (see the `lte.sh` command table above).
+
+- **A post-resume cellular re-attach can take minutes, not seconds** —
+  confirmed live 2026-08-03: `open_xdatachannel.py` streamed continuous RPC
+  traffic for 3.5 minutes before either succeeding or being interrupted, well
+  past the ~15-30s normally expected. This isn't a hang; the modem is
+  genuinely still re-registering with the tower. lte-indicator's "connecting"
+  icon state must not be driven by a short fixed timer, or it flips back to
+  "disconnected" while `lte up` is still legitimately working, which is what
+  tempts a manual disconnect/reconnect that races the in-flight attempt
+  instead of waiting it out. Fixed by having the indicator check whether
+  `lte.sh`'s lock is actually held (`lte_busy()`) rather than guessing a
+  duration.
+
 ---
 
 ## Changelog
+
+### 2026-08-03
+
+**Self-heal robustness fix** (branches `lte-selfheal-followup` /
+`lte-selfheal`, revised after live suspend/resume testing on this machine)
+
+- `lte.sh`: `up`, `hard-reset`, and `flr` now serialize on an `flock`
+  (`/run/lock/xmm7360-lte.lock`, 10 min wait) so the sleep hook's post-resume
+  `lte up` and lte-indicator's independent wake-triggered `lte up` can't race
+  each other and corrupt shared driver/interface state. `down` deliberately
+  stays outside the lock — live testing confirmed a post-resume re-attach can
+  take minutes, and `down`'s `pkill -f open_xdatachannel.py` needs to be able
+  to interrupt a still-running `up`, not queue behind it.
+- `bring_up()`: verify actual connectivity (`ping` via `wwan0`) after
+  nmcli reports the connection up, not just that `open_xdatachannel.py`
+  exited 0. A link that comes up looking fine but passes no traffic now
+  counts as a bring-up failure, so the existing hard-reset-and-retry
+  self-heal (2026-07-09) fires automatically instead of requiring a
+  manual disconnect/reconnect cycle to notice and clear it.
+- `lte-indicator`: the "connecting" icon state now checks whether
+  `lte.sh`'s lock is actually held (`lte_busy()`) instead of guessing a
+  fixed duration — a real post-resume attach was observed running 3.5
+  minutes, far past any timer that was tried, so a fixed timeout kept
+  flipping the icon back to "disconnected" mid-attempt.
 
 ### 2026-05-16
 

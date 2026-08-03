@@ -57,6 +57,15 @@ if [[ "$1" = "remove" ]]; then
 fi
 
 # down param
+#
+# Deliberately NOT gated by the flock below: `down` (via its
+# `pkill -f open_xdatachannel.py`) is the only way to interrupt an `up` that's
+# stuck waiting on a slow post-resume cellular re-attach (which can genuinely
+# take minutes, not seconds — the modem keeps streaming RPC traffic the whole
+# time). Making `down` wait for that same lock would remove the user's only
+# way to cancel a stuck attempt. The pkill causes the in-flight `up`'s
+# bring_up to fail, which triggers its own hard-reset-and-retry self-heal —
+# a real recovery path, not just a side effect to route around.
 if [[ "$1" = "down" ]]; then
   echo "taking wwan0 down!"
   # Kill open_xdatachannel.py so rmmod can succeed
@@ -72,6 +81,20 @@ if [[ "$1" = "down" ]]; then
     ss -K src "$WWAN_IP" 2>/dev/null || true
   fi
   exit
+fi
+
+# Serialize state-mutating operations from here on. Without this, the systemd
+# sleep hook's backgrounded post-resume "lte up" and lte-indicator's own D-Bus
+# wake-triggered "sudo lte up" (fired independently, ~8s later) can run
+# concurrently and step on each other's rmmod/modprobe/PCI remove-rescan
+# sequence. A second invocation now waits for the first to finish instead of
+# racing it. The wait is long (10 min) because a slow post-resume cellular
+# re-attach inside a still-running `up` is normal, not stuck — `down` above
+# is the way to actually cancel that, not a lock timeout.
+exec 9>/run/lock/xmm7360-lte.lock
+if ! flock -w 600 9; then
+  echo "ERROR: another lte.sh operation is still running after 10 minutes, giving up"
+  exit 1
 fi
 
 if [[ "$1" = "flr" ]]; then
@@ -147,6 +170,19 @@ bring_up() {
   nmcli connection delete fake-wwan 2>/dev/null || true
   nmcli connection add type dummy ifname dummy0 con-name fake-wwan
   nmcli connection up fake-wwan
+
+  # open_xdatachannel.py exiting 0 and nmcli reporting "up" only means the
+  # RPC calls and route/link setup succeeded — after a bad suspend/resume
+  # cycle the modem can still ack all of that while its data path is dead,
+  # leaving a connection that looks fine but passes no traffic. Treat that
+  # as a bring-up failure too, so the caller's hard-reset retry actually
+  # fires instead of leaving a zombie link that only a manual
+  # disconnect/reconnect cycle would eventually clear.
+  sleep 1
+  if ! timeout 10 ping -c 2 -W 5 -I wwan0 1.1.1.1 &>/dev/null; then
+    echo "ERROR: wwan0 up but no connectivity"
+    return 1
+  fi
 }
 
 if [[ "$1" = "up" ]]; then
