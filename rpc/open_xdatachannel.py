@@ -106,7 +106,7 @@ ipr.addr('add',
 
 
 if not cfg.nodefaultroute:
-    ipr.route('add',
+    ipr.route('replace',
               dst='default',
               priority=cfg.metric,
               oif=idx)
