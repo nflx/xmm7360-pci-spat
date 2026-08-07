@@ -8,7 +8,7 @@ After=systemd-udevd.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'echo mask > /sys/firmware/acpi/interrupts/gpe6E; echo mask > /sys/firmware/acpi/interrupts/gpe6F'
+ExecStart=/bin/sh -c 'grep -qw masked /sys/firmware/acpi/interrupts/gpe6E || echo mask > /sys/firmware/acpi/interrupts/gpe6E; grep -qw masked /sys/firmware/acpi/interrupts/gpe6F || echo mask > /sys/firmware/acpi/interrupts/gpe6F'
 RemainAfterExit=yes
 
 [Install]
