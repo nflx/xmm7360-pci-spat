@@ -22,23 +22,90 @@ LTE="$SCRIPT_DIR/lte.sh"
 STATE_FILE=/run/xmm7360-was-up
 LOG_FILE=/var/log/xmm7360-resume.log
 PCI_DEV=0000:71:00.0
+PCI_SYSFS=/sys/bus/pci/devices/$PCI_DEV
+GPS_USER=eml1
+GPS_UID=1000
+GPS_SERVICE=xmm7360-kismet-gps.service
 # Rescan only the modem's root port (RP02), not the whole bus.
 # Global rescan can kill the sudo/systemd session by briefly taking down
 # NVMe or other PCIe devices during re-enumeration.
 RP02=0000:00:1c.0
 
+log() {
+    echo "$(date -Is) $*" >>"$LOG_FILE"
+}
+
+stop_gps_reader() {
+    local runtime=/run/user/$GPS_UID
+
+    # The user manager can be frozen by the time system-sleep hooks run, so
+    # terminate the reader directly first. It handles SIGTERM and closes the
+    # modem nodes; stopping the unit as well prevents a later restart.
+    pkill -TERM -f '/xmm7360_kismet_nmea_tcp.py' 2>/dev/null || true
+
+    if [ -S "$runtime/bus" ]; then
+        XDG_RUNTIME_DIR="$runtime" \
+        DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+            timeout 2s runuser -u "$GPS_USER" -- \
+            systemctl --user stop "$GPS_SERVICE" >>"$LOG_FILE" 2>&1 || true
+    fi
+}
+
+modem_has_users() {
+    local node
+
+    for node in /dev/xmm0/* /dev/wwan0*; do
+        [ -e "$node" ] || continue
+        if fuser "$node" >/dev/null 2>&1; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+wait_for_modem_users() {
+    local attempt
+
+    for attempt in $(seq 1 20); do
+        modem_has_users || return 0
+        sleep 0.25
+    done
+    return 1
+}
+
 case "$1" in
     pre)
         if lsmod | grep -q xmm7360; then
             touch "$STATE_FILE"
+            # systemd runs all system-sleep hooks concurrently. Stop the GPS
+            # reader here as well so its separate hook cannot race rmmod.
+            stop_gps_reader
             "$LTE" down 2>/dev/null || true
-            rmmod xmm7360 2>/dev/null || true
+
+            if ! wait_for_modem_users; then
+                log "pre-$2: modem device nodes are still in use; skipping driver/PCI removal"
+                exit 0
+            fi
+
+            # Quiesce modem firmware/DMA before the driver frees coherent DMA
+            # rings. Without this FLR, the device has twice DMA-written into
+            # unmapped memory during teardown and crashed the kernel.
+            if [ ! -w "$PCI_SYSFS/reset" ] || ! echo 1 >"$PCI_SYSFS/reset"; then
+                log "pre-$2: PCI function reset failed; skipping driver/PCI removal"
+                exit 0
+            fi
+            sleep 1
+
+            if ! rmmod xmm7360; then
+                log "pre-$2: rmmod failed; skipping PCI removal"
+                exit 0
+            fi
         else
             rm -f "$STATE_FILE"
         fi
         # Remove PCIe device so firmware resets cleanly and modem generates
         # no PME/wakeup events during s2idle.
-        echo 1 > /sys/bus/pci/devices/$PCI_DEV/remove 2>/dev/null || true
+        echo 1 > "$PCI_SYSFS/remove" 2>/dev/null || true
         ;;
     post)
         echo 1 > /sys/bus/pci/devices/$RP02/rescan

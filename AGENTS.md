@@ -188,9 +188,20 @@ s2idle on this machine had two problems:
 ### Sleep hook behaviour
 
 **Pre-suspend:**
-1. `lte down` (kills `open_xdatachannel.py`, brings down wwan0)
-2. `rmmod xmm7360`
-3. `echo 1 > /sys/bus/pci/devices/0000:71:00.0/remove` (firmware reset)
+1. Terminate the Kismet/GPS reader and stop `xmm7360-kismet-gps.service`
+   explicitly (systemd runs sleep hooks in parallel, and the user manager may
+   already be frozen, so its separate hook alone cannot provide ordering).
+2. `lte down` (kills `open_xdatachannel.py`, brings down wwan0, removes the
+   NetworkManager connection, and resets sockets using the LTE source address).
+3. Wait up to five seconds for all `/dev/xmm0/*` and `/dev/wwan0*` users to
+   close. If they remain open, skip destructive teardown.
+4. PCI function-level reset to stop modem firmware and DMA, then wait one
+   second.
+5. `rmmod xmm7360`; only on success, remove PCI device `0000:71:00.0`.
+
+The fail-safe paths deliberately leave the disconnected modem present. That
+may cause an immediate wake on this hardware, but is safer than unloading the
+driver while the modem can still DMA and crashing the kernel.
 
 **Post-resume:**
 1. `echo 1 > /sys/bus/pci/devices/0000:00:1c.0/rescan` (RP02 only — global rescan kills the session)
@@ -268,6 +279,20 @@ systemctl enable --now acpi-mask-gpe6e.service
 ---
 
 ## Changelog
+
+### 2026-08-07
+
+**Safe pre-suspend LTE teardown**
+
+- Root-caused two machine hangs (2026-08-01 and 2026-08-07) as XMM7360 DMA
+  writes into already-unmapped memory during driver teardown. The latter
+  happened after logind requested sleep but before `PM: suspend entry`, which
+  left the laptop powered with a dead kernel and looked like a failed wake.
+- `scripts/sleep-hook.sh` now stops the Kismet/GPS reader in the same ordered
+  hook as LTE teardown, waits for all modem device-node users to close, and
+  performs PCI FLR before `rmmod` frees the driver's DMA rings.
+- If readers do not close, FLR fails, or `rmmod` fails, PCI removal is skipped
+  instead of risking another kernel crash.
 
 ### 2026-08-03
 
