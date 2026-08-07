@@ -63,20 +63,21 @@ echo 'ACTION=="add", SUBSYSTEM=="pci", KERNEL=="0000:00:1c.0", ATTR{power/wakeup
 sudo udevadm control --reload-rules
 ```
 
-### Step 3 — Mask the ACPI GPE 0x6E storm
+### Step 3 — Mask the ACPI modem wake GPEs 0x6E and 0x6F
 
-The modem generates ~600k ACPI GPE 0x6E interrupts per session that
-immediately wake the system. This service masks GPE 0x6E at every boot.
+The modem generates ~600k ACPI GPE 0x6E interrupts per session. Dell's DSDT
+also maps GPE 0x6F to `Notify (RP02, Device Wake)`. Either can wake s2idle, so
+this service masks both at every boot.
 
 ```bash
 sudo tee /etc/systemd/system/acpi-mask-gpe6e.service << 'EOF'
 [Unit]
-Description=Mask ACPI GPE 0x6E storm from Intel XMM7360 LTE modem
+Description=Mask ACPI GPE 0x6E and RP02 wake GPE 0x6F from Intel XMM7360 LTE modem
 After=systemd-udevd.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'echo disable > /sys/firmware/acpi/interrupts/gpe6E'
+ExecStart=/bin/sh -c 'echo disable > /sys/firmware/acpi/interrupts/gpe6E; echo disable > /sys/firmware/acpi/interrupts/gpe6F'
 RemainAfterExit=yes
 
 [Install]
@@ -106,6 +107,7 @@ After a reboot:
 ```bash
 # GPE should be masked
 cat /sys/firmware/acpi/interrupts/gpe6E   # expect: disabled
+cat /sys/firmware/acpi/interrupts/gpe6F   # expect: disabled
 
 # Root port wakeup should be disabled
 cat /sys/bus/pci/devices/0000:00:1c.0/power/wakeup   # expect: disabled
@@ -164,9 +166,10 @@ for CLI→daemon commands (`lte-indicator connect/disconnect/toggle/status`).
 
 s2idle on this machine had two problems:
 
-1. **GPE 0x6E storm** — the modem generates ~600k ACPI GPE 0x6E events
-   per session. This wakes the system immediately from s2idle via ACPI
-   IRQ 9 (the ACPI SCI). Masked at boot via systemd service.
+1. **GPE 0x6E storm and GPE 0x6F device wake** — the modem generates ~600k
+   GPE 0x6E events per session, while Dell's DSDT maps GPE 0x6F to an RP02
+   `Device Wake` notification. Both wake s2idle via ACPI IRQ 9 and are masked
+   at boot via the systemd service.
 
 2. **PCIe PME wakeup via RP02** — even with GPE masked, the modem's
    root port (`0000:00:1c.0`, ACPI name `RP02`) had wakeup enabled and
@@ -183,7 +186,7 @@ s2idle on this machine had two problems:
 |------|---------|
 | `/usr/lib/systemd/system-sleep/xmm7360-sleep.sh` | Pre/post suspend hook |
 | `/etc/udev/rules.d/99-lte-wakeup.rules` | Disable wakeup on RP02 |
-| `/etc/systemd/system/acpi-mask-gpe6e.service` | Mask GPE 0x6E at boot |
+| `/etc/systemd/system/acpi-mask-gpe6e.service` | Mask modem GPEs 0x6E and 0x6F at boot |
 
 ### Sleep hook behaviour
 
@@ -293,6 +296,11 @@ systemctl enable --now acpi-mask-gpe6e.service
   performs PCI FLR before `rmmod` frees the driver's DMA rings.
 - If readers do not close, FLR fails, or `rmmod` fails, PCI removal is skipped
   instead of risking another kernel crash.
+- Follow-up after three real suspend attempts: each entered s2idle but woke
+  after 32–40 seconds via ACPI IRQ 9. GPE counters and DSDT disassembly
+  identified GPE 0x6F as `Notify (RP02, Device Wake)`. The boot service now
+  masks 0x6F as well as 0x6E. Driver teardown also treats a module already
+  unloaded by a concurrent helper as success and continues PCI removal.
 
 ### 2026-08-03
 

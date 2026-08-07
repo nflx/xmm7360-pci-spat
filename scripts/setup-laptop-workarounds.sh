@@ -4,8 +4,8 @@
 #
 # These are NOT upstream xmm7360-pci-SPAT behavior — they exist because on
 # this Dell + s2idle laptop, the modem independently:
-#   1. Storms ACPI GPE 0x6E (~600k events/session), waking the system right
-#      back up from s2idle.
+#   1. Storms ACPI GPE 0x6E (~600k events/session) and raises RP02 device-wake
+#      GPE 0x6F, waking the system right back up from s2idle.
 #   2. Needs its PCIe device fully removed before suspend and re-probed on
 #      resume — a plain driver suspend/resume doesn't clean up its firmware
 #      state (see scripts/sleep-hook.sh).

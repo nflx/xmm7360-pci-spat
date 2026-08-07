@@ -9,7 +9,7 @@
 # so it keeps working if this repo ever moves. A copy drifted stale before.
 #
 # Also required for suspend to work (Dell XPS + XMM7360):
-#   1. Mask ACPI GPE 0x6E storm from modem:
+#   1. Mask ACPI GPE 0x6E storm and RP02 wake GPE 0x6F from modem:
 #      sudo systemctl enable --now acpi-mask-gpe6e.service
 #      (see sleep-hook.service in this directory)
 #   2. Disable PCIe wakeup on modem's root port RP02 (0000:00:1c.0):
@@ -96,9 +96,14 @@ case "$1" in
             fi
             sleep 1
 
-            if ! rmmod xmm7360; then
-                log "pre-$2: rmmod failed; skipping PCI removal"
-                exit 0
+            # A concurrent recovery or sleep helper may already have unloaded
+            # the module. Treat that as the desired state, not as a teardown
+            # failure that prevents PCI removal.
+            if lsmod | grep -q '^xmm7360 '; then
+                if ! rmmod xmm7360; then
+                    log "pre-$2: rmmod failed; skipping PCI removal"
+                    exit 0
+                fi
             fi
         else
             rm -f "$STATE_FILE"

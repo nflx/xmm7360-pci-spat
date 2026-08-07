@@ -10,10 +10,10 @@ upstream xmm7360-pci-SPAT behavior.
 
 On this machine, the modem independently:
 
-1. **Storms ACPI GPE 0x6E** (~600k events/session) as soon as the system
-   suspends, waking it right back up under s2idle. Masking that GPE
-   (`acpi-mask-gpe6e.service` + the `acpi_mask_gpe=0x6E` kernel boot param)
-   stops it at the source.
+1. **Raises two ACPI wake GPEs:** GPE 0x6E storms (~600k events/session), and
+   Dell's DSDT maps GPE 0x6F to `Notify (RP02, Device Wake)`. Both can wake
+   s2idle; `acpi-mask-gpe6e.service` masks both at the source. The existing
+   `acpi_mask_gpe=0x6E` kernel boot parameter masks the early-boot storm.
 2. **Doesn't survive a plain suspend/resume.** A normal driver suspend leaves
    the modem's firmware in a state the driver can't recover from on resume.
    `scripts/sleep-hook.sh` works around this by fully removing the PCIe
