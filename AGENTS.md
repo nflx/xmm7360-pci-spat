@@ -77,7 +77,7 @@ After=systemd-udevd.service
 
 [Service]
 Type=oneshot
-ExecStart=/bin/sh -c 'echo disable > /sys/firmware/acpi/interrupts/gpe6E; echo disable > /sys/firmware/acpi/interrupts/gpe6F'
+ExecStart=/bin/sh -c 'echo mask > /sys/firmware/acpi/interrupts/gpe6E; echo mask > /sys/firmware/acpi/interrupts/gpe6F'
 RemainAfterExit=yes
 
 [Install]
