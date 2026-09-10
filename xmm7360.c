@@ -1249,6 +1249,27 @@ static void xmm7360_dev_deinit(struct xmm_dev *xmm)
 static void xmm7360_remove(struct pci_dev *dev)
 {
 	struct xmm_dev *xmm = pci_get_drvdata(dev);
+	int ret;
+
+	/*
+	 * Force-quiesce the modem's DMA engine before closing rings and
+	 * freeing their buffers below. xmm7360_dev_deinit() closes each ring
+	 * via the command protocol, but that depends on cooperative firmware
+	 * that has a live control-page handshake - an unresponsive modem, or
+	 * one still actively streaming (e.g. the network queue pair carrying
+	 * live traffic), can keep DMAing into a buffer after the driver
+	 * frees it, faulting the IOMMU and locking up the kernel. This is
+	 * exactly why AGENTS.md's "lte hard-reset" does a PCIe FLR before
+	 * rmmod. Doing the FLR here too makes plain `rmmod xmm7360` safe on
+	 * its own, without depending on that userspace step.
+	 */
+	ret = pci_reset_function(dev);
+	if (ret)
+		dev_warn(&dev->dev,
+			 "pci_reset_function failed (%d), removing without FLR\n",
+			 ret);
+	if (xmm->irq)
+		synchronize_irq(xmm->irq);
 
 	xmm7360_dev_deinit(xmm);
 
@@ -1461,13 +1482,24 @@ static int xmm7360_probe(struct pci_dev *dev, const struct pci_device_id *id)
 	struct xmm_dev *xmm = kzalloc(sizeof(struct xmm_dev), GFP_KERNEL);
 	int ret;
 
-	xmm->pci_dev = dev;
-	xmm->dev = &dev->dev;
-
 	if (!xmm) {
 		dev_err(&(dev->dev), "kzalloc\n");
 		return -ENOMEM;
 	}
+
+	xmm->pci_dev = dev;
+	xmm->dev = &dev->dev;
+
+	/*
+	 * Initialize everything xmm7360_remove()/xmm7360_dev_deinit() touch,
+	 * and set drvdata, before any goto fail below - early probe failures
+	 * (e.g. a transient BAR-not-claimed race right at graphical.target)
+	 * must be able to unwind through the same single path without
+	 * operating on a zeroed work_struct or a NULL pci_get_drvdata().
+	 */
+	init_waitqueue_head(&xmm->wq);
+	INIT_WORK(&xmm->init_work, xmm7360_dev_init_work);
+	pci_set_drvdata(dev, xmm);
 
 	ret = pci_enable_device(dev);
 	if (ret) {
@@ -1502,9 +1534,6 @@ static int xmm7360_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		goto fail;
 	}
 
-	init_waitqueue_head(&xmm->wq);
-	INIT_WORK(&xmm->init_work, xmm7360_dev_init_work);
-
 	xmm->irq = pci_irq_vector(dev, 0);
 	ret = request_irq(xmm->irq, xmm7360_irq0, 0, "xmm7360", xmm);
 	if (ret) {
@@ -1512,14 +1541,11 @@ static int xmm7360_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		goto fail;
 	}
 
-	pci_set_drvdata(dev, xmm);
-
 	ret = xmm7360_dev_init(xmm);
 	if (!ret)
 		return 0;
 
 fail:
-	xmm7360_dev_deinit(xmm);
 	xmm7360_remove(dev);
 	return ret;
 }
