@@ -21,6 +21,8 @@ LTE="$SCRIPT_DIR/lte.sh"
 
 STATE_FILE=/run/xmm7360-was-up
 LOG_FILE=/var/log/xmm7360-resume.log
+LOCK_FILE=/run/xmm7360-sleep-hook.lock
+HOLDER_FILE=/run/xmm7360-sleep-hook.holder
 PCI_DEV=0000:71:00.0
 PCI_SYSFS=/sys/bus/pci/devices/$PCI_DEV
 GPS_USER=eml1
@@ -34,6 +36,29 @@ RP02=0000:00:1c.0
 log() {
     echo "$(date -Is) $*" >>"$LOG_FILE"
 }
+
+# The modem's FLR (below) has been observed to hang for minutes at the
+# kernel level (stuck in uninterruptible D state on the PCI device_lock,
+# not killable). If a suspend attempt fails and gets retried while that's
+# still stuck, a fresh invocation would pile another rmmod/reset attempt
+# onto the same jammed lock. Bail out immediately instead so at most one
+# invocation is ever stuck, rather than accumulating one per retry.
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+    log "$1-$2: a previous sleep-hook invocation still holds the PCI lock (stuck modem reset?); skipping to avoid piling up"
+    holder_pid=$(cat "$HOLDER_FILE" 2>/dev/null)
+    if [ -n "$holder_pid" ] && [ -d "/proc/$holder_pid" ]; then
+        log "holder pid=$holder_pid comm=$(cat "/proc/$holder_pid/comm" 2>/dev/null) $(grep '^State:' "/proc/$holder_pid/status" 2>/dev/null) wchan=$(cat "/proc/$holder_pid/wchan" 2>/dev/null)"
+        log "holder pid=$holder_pid kernel stack:"
+        if ! cat "/proc/$holder_pid/stack" 2>/dev/null >>"$LOG_FILE"; then
+            log "  (stack unavailable, need root/CONFIG_STACKTRACE)"
+        fi
+    else
+        log "holder pid unknown or already gone (stale holder file?)"
+    fi
+    exit 0
+fi
+echo $$ >"$HOLDER_FILE"
 
 stop_gps_reader() {
     local runtime=/run/user/$GPS_UID
