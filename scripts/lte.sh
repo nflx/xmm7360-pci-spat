@@ -154,9 +154,13 @@ bring_up() {
     sleep 1
   fi
 
-  # Explicit bind in case udev didn't auto-bind after modprobe
+  # Explicit bind in case udev didn't auto-bind after modprobe.
+  # Grouped so 2>/dev/null actually suppresses bash's own "cannot open
+  # bind for writing" message — a bare `cmd > file 2>/dev/null` fails to
+  # redirect that particular error, since it's raised while opening the
+  # first redirect target, before the second redirect is set up.
   if [ ! -e /sys/bus/pci/devices/0000:71:00.0/driver ]; then
-    echo 0000:71:00.0 > /sys/bus/pci/drivers/xmm7360/bind 2>/dev/null || true
+    { echo 0000:71:00.0 > /sys/bus/pci/drivers/xmm7360/bind; } 2>/dev/null || true
     sleep 2
   fi
   for i in $(seq 1 15); do

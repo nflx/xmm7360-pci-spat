@@ -144,8 +144,12 @@ case "$1" in
             rm -f "$STATE_FILE"
             modprobe xmm7360 2>/dev/null || true
             # udev auto-bind is unreliable after resume; bind explicitly.
+            # Grouped so 2>/dev/null actually suppresses bash's own "cannot
+            # open bind for writing" message, which otherwise leaks into
+            # LOG_FILE despite the redirect (see lte.sh's bring_up() for the
+            # same fix and why).
             sleep 1
-            echo $PCI_DEV > /sys/bus/pci/drivers/xmm7360/bind 2>/dev/null || true
+            { echo $PCI_DEV > /sys/bus/pci/drivers/xmm7360/bind; } 2>/dev/null || true
             # Run lte up in background so GNOME resumes immediately.
             # LTE will connect ~15s after desktop is visible.
             { echo "=== $(date -Is) resume: lte up ==="; "$LTE" up; } >>"$LOG_FILE" 2>&1 &
