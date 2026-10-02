@@ -46,7 +46,7 @@ try:
     r = rpc.XMMRPC()
 except Exception as ex:
     logging.error(ex)
-    exit()
+    sys.exit(1)
 
 ipr = IPRoute()
 
