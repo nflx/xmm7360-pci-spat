@@ -282,6 +282,18 @@ struct xmm_net {
 
 static void xmm7360_poll(struct xmm_dev *xmm)
 {
+	/*
+	 * The IRQ is live from request_irq() in probe(), well before
+	 * xmm7360_dev_init() -> xmm7360_cmd_ring_init() allocates xmm->cp
+	 * (the command-ring handshake itself needs the IRQ working, so
+	 * ordering it any other way isn't possible). A real hardware IRQ
+	 * arriving in that window - confirmed live, xmm7360_irq0 NULL deref
+	 * on xmm->cp ~24ms after "modem is ready" - must no-op here instead
+	 * of dereferencing a not-yet-allocated cp, same as the td_ring guard
+	 * just below in the IRQ handler.
+	 */
+	if (!xmm->cp)
+		return;
 	if (xmm->cp->status.code == 0xbadc0ded) {
 		dev_err(xmm->dev, "crashed but dma up\n");
 		xmm->error = -ENODEV;
@@ -1084,6 +1096,18 @@ static void xmm7360_net_poll(struct xmm_dev *xmm)
 	if (!xmm->net)
 		return;
 	qp = xmm->net->qp;
+	/*
+	 * xmm->net (== xn) is assigned in xmm7360_create_net() before
+	 * register_netdevice(), but xn->qp isn't assigned until after it
+	 * returns - and the IRQ is already live throughout (same reasoning
+	 * as the xmm->cp guard in xmm7360_poll() above: ordering it any
+	 * other way isn't possible). A real hardware IRQ during that window
+	 * - confirmed live, NULL deref on qp->num right after "modem is
+	 * ready", interrupting register_netdevice() mid-call - must no-op
+	 * here instead of dereferencing a not-yet-assigned qp.
+	 */
+	if (!qp)
+		return;
 	ring = &xmm->td_ring[qp->num * 2 + 1];
 
 	if (netif_queue_stopped(xmm->netdev) && xmm7360_qp_can_write(qp))
@@ -1249,28 +1273,20 @@ static void xmm7360_dev_deinit(struct xmm_dev *xmm)
 static void xmm7360_remove(struct pci_dev *dev)
 {
 	struct xmm_dev *xmm = pci_get_drvdata(dev);
-	int ret;
 
 	/*
-	 * Force-quiesce the modem's DMA engine before closing rings and
-	 * freeing their buffers below. xmm7360_dev_deinit() closes each ring
-	 * via the command protocol, but that depends on cooperative firmware
-	 * that has a live control-page handshake - an unresponsive modem, or
-	 * one still actively streaming (e.g. the network queue pair carrying
-	 * live traffic), can keep DMAing into a buffer after the driver
-	 * frees it, faulting the IOMMU and locking up the kernel. This is
-	 * exactly why AGENTS.md's "lte hard-reset" does a PCIe FLR before
-	 * rmmod. Doing the FLR here too makes plain `rmmod xmm7360` safe on
-	 * its own, without depending on that userspace step.
+	 * NOTE: this intentionally does NOT do its own PCIe FLR before
+	 * tearing down. That was tried (see git history) to make a raw
+	 * `rmmod xmm7360` self-quiesce the modem's DMA before freeing ring
+	 * buffers - but it deadlocked `pci_reset_function()` (stuck forever
+	 * in D state, immune to SIGKILL) when invoked right after lte.sh's
+	 * sleep-hook had *already* done its own FLR moments earlier via
+	 * `echo 1 > .../reset`, e.g. during suspend. That existing userspace
+	 * FLR-before-rmmod sequencing (AGENTS.md's "lte hard-reset"/sleep
+	 * hook) is the supported way to remove this driver safely; calling
+	 * `rmmod xmm7360` directly while the modem has live DMA traffic is
+	 * still not safe on its own.
 	 */
-	ret = pci_reset_function(dev);
-	if (ret)
-		dev_warn(&dev->dev,
-			 "pci_reset_function failed (%d), removing without FLR\n",
-			 ret);
-	if (xmm->irq)
-		synchronize_irq(xmm->irq);
-
 	xmm7360_dev_deinit(xmm);
 
 	if (xmm->irq)
