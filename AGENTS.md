@@ -6,6 +6,40 @@ with an Intel XMM7360 LTE Advanced Modem at PCIe `0000:71:00.0`.
 
 ---
 
+## Git workflow (read this first)
+
+This directory is the **only** working repo for the project. It lives under
+`~/claude` as a submodule (`projects/indykatorz/lte/xmm7360-pci-SPAT`) and is
+where all work happens. `/usr/local/bin/lte` symlinks to `scripts/lte.sh`
+here, so whatever branch is checked out is what actually runs on this machine.
+
+- `origin` = `git@github.com:nflx/xmm7360-pci-SPAT` (the nflx fork). There is
+  deliberately no `upstream` remote; add one temporarily if you need to pull
+  something in, then remove it.
+- **`main` is what gets pushed to the fork.** Keep it working and deployable;
+  never commit feature work straight onto it.
+- **Implement every feature or fix on its own branch**, branched from `main`,
+  then merge it back into `main` once it is tested on the real modem.
+  Docs-only tweaks like this section are the one exception.
+  - Name branches `feat/<topic>`, `bugfix/<topic>`, `chore/<topic>`.
+    Avoid `fix/`, `feature/` and `pr/`: the global gitconfig swaps the commit
+    identity for those prefixes (`onbranch:` includeIf). Inside this repo the
+    local config currently wins, but don't rely on it.
+  - Prefer plain branches in this one checkout over extra worktrees. The
+    running scripts come from this directory, so switching branches changes
+    live behaviour; rebuild/reload the module (`xmm7360.c` changes) and
+    re-run `lte up` after switching. Leave `main` checked out when done.
+- Commit author is `nflx <flux@sys.nu>` (repo-local config). Run the secret
+  scan from `~/claude/AGENTS.md` before pushing.
+- Pushing to the fork is the user's call. Don't push unless asked.
+- Archived branches (kept for reference, not for new work):
+  `archive/old-master` (pre-consolidation `master`) and the old
+  `feat/*` / `fix/datachannel-device-type` branches.
+- Archived repos: the former clones in `~/git/` are renamed
+  `archived-xmm7360-pci-SPAT*`. Don't use or push from them.
+
+---
+
 ## Hardware context
 
 | Item | Value |
